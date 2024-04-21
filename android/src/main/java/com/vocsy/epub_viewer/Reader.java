@@ -14,11 +14,24 @@ import com.folioreader.util.OnHighlightListener;
 import com.folioreader.util.ReadLocatorListener;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.UUID;
+
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 
 import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.EventChannel;
@@ -35,7 +48,8 @@ public class Reader implements OnHighlightListener, ReadLocatorListener, FolioRe
     private BinaryMessenger messenger;
     private ReadLocator read_locator;
     private static final String PAGE_CHANNEL = "sage";
-
+    private String pathToBeChanged="";
+    private File file =null;
     Reader(Context context, BinaryMessenger messenger, ReaderConfig config, EventChannel.EventSink sink) {
         this.context = context;
         readerConfig = config;
@@ -49,21 +63,83 @@ public class Reader implements OnHighlightListener, ReadLocatorListener, FolioRe
                 .setOnClosedListener(this);
         pageEventSink = sink;
     }
+    private static final String ALGORITHM = "AES";
+    private static final String KEY = "234b4eec-b3b2-49f2-9dbe-23c7da855d83";
 
+    public static void encryptFile(File inputFile, File outputFile) throws Exception {
+        SecretKeySpec secretKey = generateKey();
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+
+        FileInputStream inputStream = new FileInputStream(inputFile);
+        byte[] inputBytes = new byte[(int) inputFile.length()];
+        inputStream.read(inputBytes);
+
+        byte[] outputBytes = cipher.doFinal(inputBytes);
+
+        FileOutputStream outputStream = new FileOutputStream(outputFile);
+        outputStream.write(outputBytes);
+
+        inputStream.close();
+        outputStream.close();
+    }
+
+    public static void decryptFile(File encryptedFile, File decryptedFile) throws Exception {
+        SecretKeySpec secretKey = generateKey();
+        Cipher cipher = Cipher.getInstance(ALGORITHM);
+        cipher.init(Cipher.DECRYPT_MODE, secretKey);
+
+        FileInputStream inputStream = new FileInputStream(encryptedFile);
+        byte[] inputBytes = new byte[(int) encryptedFile.length()];
+        inputStream.read(inputBytes);
+
+        byte[] outputBytes = cipher.doFinal(inputBytes);
+
+        FileOutputStream outputStream = new FileOutputStream(decryptedFile);
+        outputStream.write(outputBytes);
+
+        inputStream.close();
+        outputStream.close();
+    }
+
+    private static SecretKeySpec generateKey() throws Exception {
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        byte[] key = sha.digest(KEY.getBytes("UTF-8"));
+        return new SecretKeySpec(key, ALGORITHM);
+    }
     public void open(String bookPath, String lastLocation) {
         final String path = bookPath;
         final String location = lastLocation;
+
         new Thread(new Runnable() {
             @Override
             public void run() {
+
                 try {
                     Log.i("SavedLocation", "-> savedLocation -> " + location);
                     if (location != null && !location.isEmpty()) {
                         ReadLocator readLocator = ReadLocator.fromJson(location);
                         folioReader.setReadLocator(readLocator);
                     }
+                    Log.i("path", "path"+path);
+                    file = new File(path);
+                    String guid = UUID.randomUUID().toString();
+                    String encryptedFilePath = path.replace(file.getName(), file.getName().replace(".epub","")+"_" + "encr" + ".aes");
+                    File file2 = new File(encryptedFilePath);
+
+                    // encrypted file present
+                    if(file2.exists()){
+                        // descrypt file
+                        decryptFile(file2,file);
+                    }else{
+                        encryptFile(file,file2);
+                    }
                     folioReader.setConfig(readerConfig.config, true)
-                            .openBook(path);
+                            .openBook(file.getPath());
+
+                  //  encryptFile(file,file2);
+
+
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -73,6 +149,7 @@ public class Reader implements OnHighlightListener, ReadLocatorListener, FolioRe
     }
 
     public void close() {
+
         folioReader.close();
     }
 
@@ -168,6 +245,10 @@ public class Reader implements OnHighlightListener, ReadLocatorListener, FolioRe
 
     @Override
     public void onFolioReaderClosed() {
+        if(file!=null && file.exists()){
+            file.delete();
+        }
+      //  renamedFile.delete();
         Log.i("readLocator", "-> saveReadLocator -> " + read_locator.toJson());
 
         if (pageEventSink != null) {
@@ -184,6 +265,5 @@ public class Reader implements OnHighlightListener, ReadLocatorListener, FolioRe
     public void saveReadLocator(ReadLocator readLocator) {
         read_locator = readLocator;
     }
-
 
 }
